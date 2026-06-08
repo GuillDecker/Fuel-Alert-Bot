@@ -1,0 +1,43 @@
+name: Fuel Price Checker
+
+on:
+  schedule:
+    # Toutes les 5 minutes (minimum GitHub Actions)
+    - cron: '*/5 * * * *'
+  workflow_dispatch:   # Permet de lancer manuellement depuis GitHub
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Récupère le code du repo
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2. Installe Python
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 3. Installe les dépendances
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # 4. Lance le bot
+      - name: Run bot
+        env:
+          NTFY_URL: ${{ secrets.NTFY_URL }}
+        run: python bot.py
+
+      # 5. Sauvegarde le cache (prices_cache.json) dans le repo
+      - name: Save cache
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add prices_cache.json
+          git diff --cached --quiet || git commit -m "chore: update prices cache"
+          git push
