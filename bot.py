@@ -50,7 +50,7 @@ def fetch_lu_prices():
         "sp95":   float(sp95),
         "sp98":   float(sp98),
         "diesel": float(diesel),
-        "mazout": float(mazout),   # > 1500L
+        "mazout": float(mazout),
         "date":   date
     }
 
@@ -85,7 +85,7 @@ def fetch_be_prices():
         "sp95":   sp95,
         "sp98":   sp98,
         "diesel": diesel,
-        "mazout": mazout,   # ≥ 2000L
+        "mazout": mazout,
         "date":   dmaz
     }
 
@@ -106,27 +106,84 @@ FUELS = ["sp95", "sp98", "diesel", "mazout"]
 def diff_label(old, new):
     if old is None:
         return "Nouveau"
-    delta = round(new - old, 4)
+    delta = new - old
     if abs(delta) < 0.0001:
         return "⚖️ Stable"
     elif delta > 0:
-        return f"📈 Hausse +{delta:.3f}€"
+        return f"📈 Hausse +{delta:.4f}€"
     else:
-        return f"📉 Baisse -{abs(delta):.3f}€"
+        return f"📉 Baisse {delta:.4f}€"
+
+def get_price_change_direction(old, new):
+    """Retourne 'hausse', 'baisse' ou 'stable'"""
+    if old is None:
+        return None
+    delta = new - old
+    if abs(delta) < 0.0001:
+        return "stable"
+    elif delta > 0:
+        return "hausse"
+    else:
+        return "baisse"
+
+def build_dynamic_subtitle(old_lu, new_lu, old_be, new_be):
+    """Construit le sous-titre en fonction des changements"""
+    
+    # Déterminer les changements pour chaque pays
+    lu_changes = {}
+    be_changes = {}
+    
+    for fuel in FUELS:
+        lu_direction = get_price_change_direction(old_lu.get(fuel), new_lu[fuel])
+        be_direction = get_price_change_direction(old_be.get(fuel), new_be[fuel])
+        
+        if lu_direction:
+            lu_changes[fuel] = lu_direction
+        if be_direction:
+            be_changes[fuel] = be_direction
+    
+    # Si pas de changement détecté (cache vide au premier lancement)
+    if not lu_changes and not be_changes:
+        return "⛽️ Mise à jour des prix"
+    
+    # Analyser les tendances
+    lu_hausse = sum(1 for v in lu_changes.values() if v == "hausse")
+    lu_baisse = sum(1 for v in lu_changes.values() if v == "baisse")
+    be_hausse = sum(1 for v in be_changes.values() if v == "hausse")
+    be_baisse = sum(1 for v in be_changes.values() if v == "baisse")
+    
+    # Construire le titre dynamique
+    lu_text = ""
+    be_text = ""
+    
+    if lu_baisse > 0 and lu_hausse == 0:
+        lu_text = "🇱🇺 Luxembourg baisse"
+    elif lu_hausse > 0 and lu_baisse == 0:
+        lu_text = "🇱🇺 Luxembourg hausse"
+    elif lu_baisse > 0 and lu_hausse > 0:
+        lu_text = "🇱🇺 Luxembourg mixte"
+    
+    if be_baisse > 0 and be_hausse == 0:
+        be_text = "🇧🇪 Belgique baisse"
+    elif be_hausse > 0 and be_baisse == 0:
+        be_text = "🇧🇪 Belgique hausse"
+    elif be_baisse > 0 and be_hausse > 0:
+        be_text = "🇧🇪 Belgique mixte"
+    
+    # Combiner les textes
+    if lu_text and be_text:
+        return f"{lu_text} & {be_text}"
+    elif lu_text:
+        return f"{lu_text} !"
+    elif be_text:
+        return f"{be_text} !"
+    else:
+        return "⛽️ Mise à jour des prix"
 
 def build_notification(old_lu, new_lu, old_be, new_be):
     today = datetime.now().strftime("%d/%m")
 
-    changed_lu = any(old_lu.get(k) != new_lu[k] for k in FUELS)
-    changed_be = any(old_be.get(k) != new_be[k] for k in FUELS)
-
-    if changed_lu and changed_be:
-        subtitle = "🇱🇺🇧🇪 Le LU et la BE changent leurs prix !"
-    elif changed_lu:
-        subtitle = "🇱🇺 Le Luxembourg change ses prix !"
-    else:
-        subtitle = "🇧🇪 La Belgique change ses prix !"
-
+    subtitle = build_dynamic_subtitle(old_lu, new_lu, old_be, new_be)
     title = f"⛽️ Alerte Carburants ({today})"
 
     lines = [subtitle, ""]
@@ -150,8 +207,8 @@ def build_notification(old_lu, new_lu, old_be, new_be):
             trophy = "🤝 Égalité !"
 
         lines.append(f"{label} | {trophy}")
-        lines.append(f"🇱🇺 {lu_val:.3f}€ ({diff_label(old_lu.get(fuel_key), lu_val)})")
-        lines.append(f"🇧🇪 {be_val:.3f}€ ({diff_label(old_be.get(fuel_key), be_val)})")
+        lines.append(f"🇱🇺 {lu_val:.4f}€ ({diff_label(old_lu.get(fuel_key), lu_val)})")
+        lines.append(f"🇧🇪 {be_val:.4f}€ ({diff_label(old_be.get(fuel_key), be_val)})")
         lines.append("")
 
     return title, "\n".join(lines).strip()
