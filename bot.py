@@ -10,7 +10,7 @@ NTFY_URL   = os.environ.get("NTFY_URL")
 CACHE_FILE = "prices_cache.json"
 
 URL_LU = "https://www.petrol.lu/prix-officiels/"
-URL_BE = "https://www.energiafed.be/fr/prix-maximums"
+URL_BE = "https://carbu.com/belgique/prixmaximum"  # ✅ NOUVELLE URL
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -54,39 +54,68 @@ def fetch_lu_prices():
         "date":   date
     }
 
-# ─── Scraping Belgique (energiafed.be / JSON) ──────────────────────
+# ─── Scraping Belgique (carbu.com) ──────────────────────────────
 def fetch_be_prices():
     r = requests.get(URL_BE, headers=HEADERS, timeout=15)
     r.raise_for_status()
-    raw = r.text
+    soup = BeautifulSoup(r.text, "html.parser")
 
-    # Chercher le JSON dans la page
-    match = re.search(r'"samenstellingen":\s*(\[.*?\])\s*,', raw, re.DOTALL)
-    if not match:
-        raise ValueError("JSON samenstellingen introuvable")
-    
-    try:
-        data = json.loads(match.group(1))
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Erreur parsing JSON BE : {e}")
+    # Chercher le tableau "prix-officiel"
+    table = soup.find("table", class_="prix-officiel")
+    if not table:
+        raise ValueError("Tableau prix-officiel introuvable sur carbu.com")
 
-    def find_product(name):
-        for item in data:
-            if item.get("name") == name:
-                return float(item["prijs"]), item.get("datum", "")
-        raise ValueError(f"Produit introuvable : {name}")
+    rows = table.find("tbody").find_all("tr")
+    if not rows:
+        raise ValueError("Aucune ligne trouvée dans le tableau carbu.com")
 
-    sp95, d95 = find_product("Essence 95 RON - E5")
-    sp98, d98 = find_product("Essence 98 RON - E5")
-    diesel, ddie = find_product("Diesel")
-    mazout, dmaz = find_product("Gasoil Diesel (application chauffage) (≥ 2000 L)")
+    prices = {}
+    date = None
+
+    for row in rows:
+        cells = row.find_all("td")
+        if len(cells) < 2:
+            continue
+
+        fuel_name = cells[0].text.strip()
+        price_str = cells[1].text.strip().replace(",", ".").replace("€/l", "").strip()
+
+        try:
+            price = float(price_str)
+        except ValueError:
+            continue
+
+        # Extraire la date du premier prix trouvé
+        if date is None:
+            # La date est dans le header du tableau
+            thead = table.find("thead")
+            if thead:
+                date_cell = thead.find_all("th")
+                if len(date_cell) > 1:
+                    date = date_cell[1].text.strip()
+
+        # Mapper les noms de carburants
+        if "Diesel" in fuel_name and "B7" in fuel_name:
+            prices["diesel"] = price
+        elif "Super 95" in fuel_name or "E10" in fuel_name:
+            prices["sp95"] = price
+        elif "Super 98" in fuel_name:
+            prices["sp98"] = price
+        elif "Gasoil" in fuel_name or "mazout" in fuel_name.lower():
+            prices["mazout"] = price
+
+    # Vérifier que tous les carburants sont présents
+    required = ["sp95", "sp98", "diesel", "mazout"]
+    for fuel in required:
+        if fuel not in prices:
+            raise ValueError(f"Carburant introuvable : {fuel}")
 
     return {
-        "sp95":   sp95,
-        "sp98":   sp98,
-        "diesel": diesel,
-        "mazout": mazout,
-        "date":   dmaz
+        "sp95":   prices["sp95"],
+        "sp98":   prices["sp98"],
+        "diesel": prices["diesel"],
+        "mazout": prices["mazout"],
+        "date":   date or "2026-06-11"
     }
 
 # ─── Cache ─────────────────────────────────────────────────────────
