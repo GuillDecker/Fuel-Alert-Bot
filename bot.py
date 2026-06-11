@@ -60,25 +60,26 @@ def fetch_be_prices():
     r.raise_for_status()
     raw = r.text
 
-    def extract(name):
-        block = re.search(
-            r'(\{[^{}]*?"name":"' + re.escape(name) + r'"[^{}]*?\})',
-            raw
-        )
-        if block:
-            prijs = re.search(r'"prijs":"([\d.]+)"', block.group(1))
-            datum = re.search(r'"datum":"([\d-]+)"', block.group(1))
-            if prijs:
-                return (
-                    float(prijs.group(1)),
-                    datum.group(1) if datum else ""
-                )
-        raise ValueError(f"Prix BE introuvable pour : {name}")
+    # Chercher le JSON dans la page
+    match = re.search(r'"samenstellingen":\s*(\[.*?\])\s*,', raw, re.DOTALL)
+    if not match:
+        raise ValueError("JSON samenstellingen introuvable")
+    
+    try:
+        data = json.loads(match.group(1))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Erreur parsing JSON BE : {e}")
 
-    sp95,   d95   = extract("Essence 95 RON - E5")
-    sp98,   d98   = extract("Essence 98 RON - E5")
-    diesel, ddie  = extract("Diesel")
-    mazout, dmaz  = extract("Gasoil Diesel (application chauffage) (≥ 2000 L)")
+    def find_product(name):
+        for item in data:
+            if item.get("name") == name:
+                return float(item["prijs"]), item.get("datum", "")
+        raise ValueError(f"Produit introuvable : {name}")
+
+    sp95, d95 = find_product("Essence 95 RON - E5")
+    sp98, d98 = find_product("Essence 98 RON - E5")
+    diesel, ddie = find_product("Diesel")
+    mazout, dmaz = find_product("Gasoil Diesel (application chauffage) (≥ 2000 L)")
 
     return {
         "sp95":   sp95,
