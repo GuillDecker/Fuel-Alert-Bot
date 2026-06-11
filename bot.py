@@ -10,7 +10,8 @@ NTFY_URL   = os.environ.get("NTFY_URL")
 CACHE_FILE = "prices_cache.json"
 
 URL_LU = "https://www.petrol.lu/prix-officiels/"
-URL_BE = "https://carbu.com/belgique/prixmaximum"  # ✅ NOUVELLE URL
+URL_BE = "https://carbu.com/belgique/prixmaximum"
+URL_BE_MAZOUT = "https://carbu.com/belgique/prixOfficielMazout"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -54,68 +55,70 @@ def fetch_lu_prices():
         "date":   date
     }
 
-# ─── Scraping Belgique (carbu.com) ──────────────────────────────
+# ─── Scraping Belgique - Mazout (carbu.com) ────────────────────────
+def fetch_be_mazout():
+    """Récupère le prix du mazout depuis la page dédiée"""
+    try:
+        r = requests.get(URL_BE_MAZOUT, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        
+        # Chercher les cellules de prix
+        price_cells = soup.find_all("td", class_="price")
+        if price_cells:
+            price_text = price_cells[0].text.strip().replace(",", ".").replace("€/l", "").strip()
+            return float(price_text)
+    except Exception as e:
+        print(f"⚠️ Mazout non trouvé : {e}")
+    
+    return 1.0  # Valeur par défaut si erreur
+
+# ─── Scraping Belgique - Carburants (carbu.com) ─────────────────────
 def fetch_be_prices():
     r = requests.get(URL_BE, headers=HEADERS, timeout=15)
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "html.parser")
 
-    # Chercher le tableau "prix-officiel"
-    table = soup.find("table", class_="prix-officiel")
-    if not table:
-        raise ValueError("Tableau prix-officiel introuvable sur carbu.com")
-
-    rows = table.find("tbody").find_all("tr")
-    if not rows:
-        raise ValueError("Aucune ligne trouvée dans le tableau carbu.com")
-
     prices = {}
-    date = None
 
-    for row in rows:
-        cells = row.find_all("td")
-        if len(cells) < 2:
-            continue
+    # Chercher tous les TD avec class "price" et leurs labels
+    price_cells = soup.find_all("td", class_="price")
+    fuel_cells = soup.find_all("td", class_="officialPriceBe_col1")
 
-        fuel_name = cells[0].text.strip()
-        price_str = cells[1].text.strip().replace(",", ".").replace("€/l", "").strip()
+    if not price_cells or not fuel_cells:
+        raise ValueError("Tableau de prix introuvable sur carbu.com")
+
+    # Parcourir les paires fuel/price
+    for fuel_cell, price_cell in zip(fuel_cells, price_cells):
+        fuel_name = fuel_cell.text.strip().lower()
+        price_text = price_cell.text.strip().replace(",", ".").replace("€/l", "").strip()
 
         try:
-            price = float(price_str)
+            price = float(price_text)
         except ValueError:
             continue
 
-        # Extraire la date du premier prix trouvé
-        if date is None:
-            # La date est dans le header du tableau
-            thead = table.find("thead")
-            if thead:
-                date_cell = thead.find_all("th")
-                if len(date_cell) > 1:
-                    date = date_cell[1].text.strip()
-
-        # Mapper les noms de carburants
-        if "Diesel" in fuel_name and "B7" in fuel_name:
+        # Mapper les noms
+        if "diesel" in fuel_name:
             prices["diesel"] = price
-        elif "Super 95" in fuel_name or "E10" in fuel_name:
+        elif "95" in fuel_name or "e10" in fuel_name:
             prices["sp95"] = price
-        elif "Super 98" in fuel_name:
+        elif "98" in fuel_name:
             prices["sp98"] = price
-        elif "Gasoil" in fuel_name or "mazout" in fuel_name.lower():
-            prices["mazout"] = price
 
-    # Vérifier que tous les carburants sont présents
-    required = ["sp95", "sp98", "diesel", "mazout"]
-    for fuel in required:
-        if fuel not in prices:
-            raise ValueError(f"Carburant introuvable : {fuel}")
+    # Vérifier qu'on a au moins 3 carburants
+    if len(prices) < 3:
+        raise ValueError(f"Pas assez de carburants trouvés : {prices}")
+
+    # Récupérer le mazout séparément
+    prices["mazout"] = fetch_be_mazout()
 
     return {
-        "sp95":   prices["sp95"],
-        "sp98":   prices["sp98"],
-        "diesel": prices["diesel"],
-        "mazout": prices["mazout"],
-        "date":   date or "2026-06-11"
+        "sp95":   prices.get("sp95", 0),
+        "sp98":   prices.get("sp98", 0),
+        "diesel": prices.get("diesel", 0),
+        "mazout": prices.get("mazout", 1.0),
+        "date":   datetime.now().strftime("%Y-%m-%d")
     }
 
 # ─── Cache ─────────────────────────────────────────────────────────
@@ -272,16 +275,16 @@ def main():
 
     try:
         new_lu = fetch_lu_prices()
-        print(f"  LU -> {new_lu}")
+        print(f"  ✅ LU -> {new_lu}")
     except Exception as e:
-        print(f"Erreur scraping LU : {e}")
+        print(f"❌ Erreur scraping LU : {e}")
         return
 
     try:
         new_be = fetch_be_prices()
-        print(f"  BE -> {new_be}")
+        print(f"  ✅ BE -> {new_be}")
     except Exception as e:
-        print(f"Erreur scraping BE : {e}")
+        print(f"❌ Erreur scraping BE : {e}")
         return
 
     cache  = load_cache()
@@ -292,10 +295,10 @@ def main():
     be_changed = any(old_be.get(k) != new_be[k] for k in FUELS)
 
     if not lu_changed and not be_changed:
-        print("  Aucun changement detecte.")
+        print("  ℹ️ Aucun changement detecte.")
         return
 
-    print(f"  Changement detecte ! LU={lu_changed} BE={be_changed}")
+    print(f"  🔔 Changement detecte ! LU={lu_changed} BE={be_changed}")
 
     title, message = build_notification(old_lu, new_lu, old_be, new_be)
     send_notification(title, message)
@@ -303,7 +306,7 @@ def main():
     cache["lu"] = new_lu
     cache["be"] = new_be
     save_cache(cache)
-    print("  Cache mis a jour.")
+    print("  ✅ Cache mis a jour.")
 
 if __name__ == "__main__":
     main()
