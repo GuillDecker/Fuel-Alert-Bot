@@ -28,7 +28,6 @@ def fetch_lu_prices():
     if not table:
         raise ValueError("Tableau prices-table introuvable sur petrol.lu")
 
-    # On prend la première ligne TVAC (prix TTC)
     rows = table.find("tbody").find_all("tr")
     tvac_row = None
     for row in rows:
@@ -45,13 +44,13 @@ def fetch_lu_prices():
     sp98   = tvac_row[1].text.strip().replace(",", ".")
     sp95   = tvac_row[2].text.strip().replace(",", ".")
     diesel = tvac_row[3].text.strip().replace(",", ".")
-    mazout = tvac_row[5].text.strip().replace(",", ".")  # Gasoil chauff. BTS
+    mazout = tvac_row[5].text.strip().replace(",", ".")  # Gasoil chauff. BTS (> 1500L)
 
     return {
         "sp95":   float(sp95),
         "sp98":   float(sp98),
         "diesel": float(diesel),
-        "mazout": float(mazout),
+        "mazout": float(mazout),   # > 1500L
         "date":   date
     }
 
@@ -62,40 +61,31 @@ def fetch_be_prices():
     raw = r.text
 
     def extract(name):
-        # Cherche prijs avant ou après le name
-        m = re.search(
-            r'"datum":"([\d-]+)"[^}]*?"name":"' + re.escape(name) + r'"[^}]*?"price_change":"(\w+)"',
+        block = re.search(
+            r'(\{[^{}]*?"name":"' + re.escape(name) + r'"[^{}]*?\})',
             raw
         )
-        if m:
-            # On récupère aussi le prix dans le même bloc
-            block = re.search(
-                r'(\{[^{}]*?"name":"' + re.escape(name) + r'"[^{}]*?\})',
-                raw
-            )
-            if block:
-                prijs = re.search(r'"prijs":"([\d.]+)"', block.group(1))
-                datum = re.search(r'"datum":"([\d-]+)"', block.group(1))
-                change = re.search(r'"price_change":"(\w+)"', block.group(1))
-                if prijs:
-                    return (
-                        float(prijs.group(1)),
-                        datum.group(1) if datum else "",
-                        change.group(1) if change else "equal"
-                    )
+        if block:
+            prijs = re.search(r'"prijs":"([\d.]+)"', block.group(1))
+            datum = re.search(r'"datum":"([\d-]+)"', block.group(1))
+            if prijs:
+                return (
+                    float(prijs.group(1)),
+                    datum.group(1) if datum else ""
+                )
         raise ValueError(f"Prix BE introuvable pour : {name}")
 
-    sp95,   d95,   c95   = extract("Essence 95 RON - E5")
-    sp98,   d98,   c98   = extract("Essence 98 RON - E5")
-    diesel, ddie,  cdie  = extract("Diesel")
-    mazout, dmaz,  cmaz  = extract("Gasoil de chauffage (H0/H7) (< 2000 L)")
+    sp95,   d95   = extract("Essence 95 RON - E5")
+    sp98,   d98   = extract("Essence 98 RON - E5")
+    diesel, ddie  = extract("Diesel")
+    mazout, dmaz  = extract("Gasoil de chauffage (H0/H7) (≥ 2000 L)")
 
     return {
         "sp95":   sp95,
         "sp98":   sp98,
         "diesel": diesel,
-        "mazout": mazout,
-        "date":   ddie  # date de référence (diesel)
+        "mazout": mazout,   # ≥ 2000L
+        "date":   ddie
     }
 
 # ─── Cache ─────────────────────────────────────────────────────────
@@ -144,7 +134,7 @@ def build_notification(old_lu, new_lu, old_be, new_be):
         ("diesel", "🟡 DIESEL"),
         ("sp95",   "🟢 SP95"),
         ("sp98",   "🔵 SP98"),
-        ("mazout", "🔥 MAZOUT"),
+        ("mazout", "🔥 MAZOUT CHAUFFAGE"),
     ]
 
     for fuel_key, label in fuel_display:
