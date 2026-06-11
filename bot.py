@@ -78,14 +78,14 @@ def fetch_be_prices():
     sp95,   d95   = extract("Essence 95 RON - E5")
     sp98,   d98   = extract("Essence 98 RON - E5")
     diesel, ddie  = extract("Diesel")
-    mazout, dmaz  = extract("Gasoil de chauffage (H0/H7) (≥ 2000 L)")
+    mazout, dmaz  = extract("Gasoil Diesel (application chauffage) (≥ 2000 L)")
 
     return {
         "sp95":   sp95,
         "sp98":   sp98,
         "diesel": diesel,
         "mazout": mazout,   # ≥ 2000L
-        "date":   ddie
+        "date":   dmaz
     }
 
 # ─── Cache ─────────────────────────────────────────────────────────
