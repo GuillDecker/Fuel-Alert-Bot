@@ -9,15 +9,17 @@ from datetime import datetime
 NTFY_URL   = os.environ.get("NTFY_URL")
 CACHE_FILE = "prices_cache.json"
 
-URL_LU = "https://www.petrol.lu/prix-officiels/"
-URL_BE = "https://carbu.com/belgique/prixmaximum"
-URL_BE_MAZOUT = "https://carbu.com/belgique/prixOfficielMazout"
+URL_LU        = "https://www.petrol.lu/prix-officiels/"
+URL_BE        = "https://carbu.com/belgique/prixmaximum"
+URL_BE_MAZOUT = "https://petrolprices.economie.fgov.be/petrolprices?locale=fr"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) "
                   "Chrome/124.0.0.0 Safari/537.36"
 }
+
+FUELS = ["sp95", "sp98", "diesel", "mazout"]
 
 # ─── Scraping Luxembourg (petrol.lu) ───────────────────────────────
 def fetch_lu_prices():
@@ -29,9 +31,9 @@ def fetch_lu_prices():
     if not table:
         raise ValueError("Tableau prices-table introuvable sur petrol.lu")
 
-    rows = table.find("tbody").find_all("tr")
+    # On prend la 1ère ligne TVAC
     tvac_row = None
-    for row in rows:
+    for row in table.find("tbody").find_all("tr"):
         cells = row.find_all("td")
         if cells and cells[-1].text.strip() == "TVAC":
             tvac_row = cells
@@ -40,86 +42,74 @@ def fetch_lu_prices():
     if not tvac_row:
         raise ValueError("Ligne TVAC introuvable sur petrol.lu")
 
-    # Colonnes : Date | Super98 | Super95 | Diesel | Gasoil chauff | Gasoil BTS | TVA
-    date   = tvac_row[0].text.strip()
+    # Colonnes : Date | Super98 | Super95 | Diesel | Gasoil chauff | Gasoil chauff BTS (>1500) | TVA
     sp98   = tvac_row[1].text.strip().replace(",", ".")
     sp95   = tvac_row[2].text.strip().replace(",", ".")
     diesel = tvac_row[3].text.strip().replace(",", ".")
-    mazout = tvac_row[5].text.strip().replace(",", ".")  # Gasoil chauff. BTS (> 1500L)
+    mazout = tvac_row[5].text.strip().replace(",", ".")  # Gasoil chauff. BTS >1500L
 
     return {
-        "sp95":   float(sp95),
-        "sp98":   float(sp98),
-        "diesel": float(diesel),
-        "mazout": float(mazout),
-        "date":   date
+        "sp95":   round(float(sp95),   3),
+        "sp98":   round(float(sp98),   3),
+        "diesel": round(float(diesel), 3),
+        "mazout": round(float(mazout), 3),
     }
 
-# ─── Scraping Belgique - Mazout (carbu.com) ────────────────────────
+# ─── Scraping Belgique - Mazout >2000L (SPF Economie - officiel) ──
 def fetch_be_mazout():
-    """Récupère le prix du mazout depuis la page dédiée"""
-    try:
-        r = requests.get(URL_BE_MAZOUT, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-        
-        # Chercher les cellules de prix
-        price_cells = soup.find_all("td", class_="price")
-        if price_cells:
-            price_text = price_cells[0].text.strip().replace(",", ".").replace("€/l", "").strip()
-            return float(price_text)
-    except Exception as e:
-        print(f"⚠️ Mazout non trouvé : {e}")
-    
-    return 1.0  # Valeur par défaut si erreur
+    """Récupère le prix officiel du gasoil de chauffage BE >2000L (euro/l)."""
+    r = requests.get(URL_BE_MAZOUT, headers=HEADERS, timeout=20)
+    r.raise_for_status()
+    soup = BeautifulSoup(r.text, "html.parser")
 
-# ─── Scraping Belgique - Carburants (carbu.com) ─────────────────────
+    for row in soup.select("tbody#petrolTable_data tr"):
+        cells = row.find_all("td")
+        if len(cells) < 2:
+            continue
+        label = cells[0].get_text(strip=True).lower()
+        # On cible bien le ">2000L" = "à partir de 2000 l"
+        if "chauffage" in label and "partir de 2000" in label:
+            prix_txt = cells[1].get_text(strip=True)        # "1,1029  euro/l"
+            prix = prix_txt.split("euro")[0].strip()         # "1,1029"
+            return round(float(prix.replace(",", ".")), 3)   # 1.103
+
+    raise ValueError("Mazout BE >2000L introuvable sur petrolprices.economie.fgov.be")
+
+# ─── Scraping Belgique - Carburants ───────────────────────────────
 def fetch_be_prices():
     r = requests.get(URL_BE, headers=HEADERS, timeout=15)
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "html.parser")
 
     prices = {}
-
-    # Chercher tous les TD avec class "price" et leurs labels
+    fuel_cells  = soup.find_all("td", class_="officialPriceBe_col1")
     price_cells = soup.find_all("td", class_="price")
-    fuel_cells = soup.find_all("td", class_="officialPriceBe_col1")
 
-    if not price_cells or not fuel_cells:
+    if not fuel_cells or not price_cells:
         raise ValueError("Tableau de prix introuvable sur carbu.com")
 
-    # Parcourir les paires fuel/price
     for fuel_cell, price_cell in zip(fuel_cells, price_cells):
-        fuel_name = fuel_cell.text.strip().lower()
+        fuel_name  = fuel_cell.text.strip().lower()
         price_text = price_cell.text.strip().replace(",", ".").replace("€/l", "").strip()
-
         try:
-            price = float(price_text)
+            price = round(float(price_text), 3)
         except ValueError:
             continue
 
-        # Mapper les noms
         if "diesel" in fuel_name:
             prices["diesel"] = price
-        elif "95" in fuel_name or "e10" in fuel_name:
+        elif ("95" in fuel_name or "e10" in fuel_name) and "98" not in fuel_name:
             prices["sp95"] = price
-        elif "98" in fuel_name:
+        elif "98" in fuel_name and "e5" in fuel_name and "sp98" not in prices:
             prices["sp98"] = price
 
-    # Vérifier qu'on a au moins 3 carburants
-    if len(prices) < 3:
-        raise ValueError(f"Pas assez de carburants trouvés : {prices}")
+    if not all(k in prices for k in ["sp95", "sp98", "diesel"]):
+        raise ValueError(f"Prix BE incomplets : {prices}")
 
-    # Récupérer le mazout séparément
+    # Mazout via la source officielle SPF Economie
     prices["mazout"] = fetch_be_mazout()
 
-    return {
-        "sp95":   prices.get("sp95", 0),
-        "sp98":   prices.get("sp98", 0),
-        "diesel": prices.get("diesel", 0),
-        "mazout": prices.get("mazout", 1.0),
-        "date":   datetime.now().strftime("%Y-%m-%d")
-    }
+    return prices
 
 # ─── Cache ─────────────────────────────────────────────────────────
 def load_cache():
@@ -132,102 +122,40 @@ def save_cache(data):
     with open(CACHE_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
-# ─── Comparaison & formatage ───────────────────────────────────────
-FUELS = ["sp95", "sp98", "diesel", "mazout"]
-
+# ─── Comparaison & formatage ────────────────────────────────────────
 def diff_label(old, new):
     if old is None:
-        return "Nouveau"
-    delta = new - old
-    if abs(delta) < 0.0001:
+        return "🆕 Nouveau"
+    delta = round(new - old, 3)
+    if abs(delta) < 0.001:
         return "⚖️ Stable"
     elif delta > 0:
-        return f"📈 Hausse +{delta:.4f}€"
+        return f"📈 Hausse de +{delta:.3f}€"
     else:
-        return f"📉 Baisse {delta:.4f}€"
-
-def get_price_change_direction(old, new):
-    """Retourne 'hausse', 'baisse' ou 'stable'"""
-    if old is None:
-        return None
-    delta = new - old
-    if abs(delta) < 0.0001:
-        return "stable"
-    elif delta > 0:
-        return "hausse"
-    else:
-        return "baisse"
-
-def build_dynamic_subtitle(old_lu, new_lu, old_be, new_be):
-    """Construit le sous-titre en fonction des changements"""
-    
-    # Déterminer les changements pour chaque pays
-    lu_changes = {}
-    be_changes = {}
-    
-    for fuel in FUELS:
-        lu_direction = get_price_change_direction(old_lu.get(fuel), new_lu[fuel])
-        be_direction = get_price_change_direction(old_be.get(fuel), new_be[fuel])
-        
-        if lu_direction:
-            lu_changes[fuel] = lu_direction
-        if be_direction:
-            be_changes[fuel] = be_direction
-    
-    # Si pas de changement détecté (cache vide au premier lancement)
-    if not lu_changes and not be_changes:
-        return "⛽️ Mise à jour des prix"
-    
-    # Analyser les tendances
-    lu_hausse = sum(1 for v in lu_changes.values() if v == "hausse")
-    lu_baisse = sum(1 for v in lu_changes.values() if v == "baisse")
-    be_hausse = sum(1 for v in be_changes.values() if v == "hausse")
-    be_baisse = sum(1 for v in be_changes.values() if v == "baisse")
-    
-    # Construire le titre dynamique
-    lu_text = ""
-    be_text = ""
-    
-    if lu_baisse > 0 and lu_hausse == 0:
-        lu_text = "🇱🇺 Luxembourg baisse"
-    elif lu_hausse > 0 and lu_baisse == 0:
-        lu_text = "🇱🇺 Luxembourg hausse"
-    elif lu_baisse > 0 and lu_hausse > 0:
-        lu_text = "🇱🇺 Luxembourg mixte"
-    
-    if be_baisse > 0 and be_hausse == 0:
-        be_text = "🇧🇪 Belgique baisse"
-    elif be_hausse > 0 and be_baisse == 0:
-        be_text = "🇧🇪 Belgique hausse"
-    elif be_baisse > 0 and be_hausse > 0:
-        be_text = "🇧🇪 Belgique mixte"
-    
-    # Combiner les textes
-    if lu_text and be_text:
-        return f"{lu_text} & {be_text}"
-    elif lu_text:
-        return f"{lu_text} !"
-    elif be_text:
-        return f"{be_text} !"
-    else:
-        return "⛽️ Mise à jour des prix"
+        return f"📉 Baisse de {delta:.3f}€"
 
 def build_notification(old_lu, new_lu, old_be, new_be):
     today = datetime.now().strftime("%d/%m")
 
-    subtitle = build_dynamic_subtitle(old_lu, new_lu, old_be, new_be)
-    title = f"⛽️ Alerte Carburants ({today})"
+    changed_lu = any(old_lu.get(k) != new_lu[k] for k in FUELS)
+    changed_be = any(old_be.get(k) != new_be[k] for k in FUELS)
 
+    if changed_lu and changed_be:
+        subtitle = "🇱🇺🇧🇪 Les deux pays changent leurs prix !"
+    elif changed_lu:
+        subtitle = "🇱🇺 Luxembourg change ses prix !"
+    else:
+        subtitle = "🇧🇪 Belgique change ses prix !"
+
+    title = f"⛽️ Alerte Carburants ({today})"
     lines = [subtitle, ""]
 
-    fuel_display = [
-        ("diesel", "🟡 DIESEL"),
-        ("sp95",   "🟢 SP95"),
-        ("sp98",   "🔵 SP98"),
-        ("mazout", "🔥 MAZOUT CHAUFFAGE"),
-    ]
-
-    for fuel_key, label in fuel_display:
+    for fuel_key, emoji, label in [
+        ("diesel", "🟡", "DIESEL"),
+        ("sp95",   "🟢", "SP95"),
+        ("sp98",   "🔵", "SP98"),
+        ("mazout", "🔥", "MAZOUT CHAUFFAGE"),
+    ]:
         lu_val = new_lu[fuel_key]
         be_val = new_be[fuel_key]
 
@@ -238,9 +166,9 @@ def build_notification(old_lu, new_lu, old_be, new_be):
         else:
             trophy = "🤝 Égalité !"
 
-        lines.append(f"{label} | {trophy}")
-        lines.append(f"🇱🇺 {lu_val:.4f}€ ({diff_label(old_lu.get(fuel_key), lu_val)})")
-        lines.append(f"🇧🇪 {be_val:.4f}€ ({diff_label(old_be.get(fuel_key), be_val)})")
+        lines.append(f"{emoji} {label} | {trophy}")
+        lines.append(f"🇱🇺 {lu_val:.3f}€ ({diff_label(old_lu.get(fuel_key), lu_val)})")
+        lines.append(f"🇧🇪 {be_val:.3f}€ ({diff_label(old_be.get(fuel_key), be_val)})")
         lines.append("")
 
     return title, "\n".join(lines).strip()
@@ -248,41 +176,37 @@ def build_notification(old_lu, new_lu, old_be, new_be):
 # ─── Envoi ntfy ────────────────────────────────────────────────────
 def send_notification(title, message):
     if not NTFY_URL:
-        print("NTFY_URL non defini — notif non envoyee.")
+        print("⚠️ NTFY_URL non défini — notif non envoyée.")
         print(f"TITRE   : {title}")
         print(f"MESSAGE :\n{message}")
         return
 
-    try:
-        response = requests.post(
-            NTFY_URL,
-            data=message.encode("utf-8"),
-            headers={
-                "Title":    title.encode("utf-8"),
-                "Priority": "high",
-                "Tags":     "fuelpump,rotating_light"
-            },
-            timeout=10
-        )
-        response.raise_for_status()
-        print(f"Notification envoyee : {title} (Status: {response.status_code})")
-    except Exception as e:
-        print(f"Erreur lors de l'envoi ntfy : {e}")
+    requests.post(
+        NTFY_URL,
+        data=message.encode("utf-8"),
+        headers={
+            "Title":    title.encode("utf-8"),
+            "Priority": "high",
+            "Tags":     "fuelpump,rotating_light"
+        },
+        timeout=10
+    )
+    print(f"✅ Notification envoyée : {title}")
 
-# ─── Main ──────────────────────────────────────────────────────────
+# ─── Main ───────────────────────────────────────────────────────────
 def main():
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Verification des prix...")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Vérification des prix...")
 
     try:
         new_lu = fetch_lu_prices()
-        print(f"  ✅ LU -> {new_lu}")
+        print(f"  LU → {new_lu}")
     except Exception as e:
         print(f"❌ Erreur scraping LU : {e}")
         return
 
     try:
         new_be = fetch_be_prices()
-        print(f"  ✅ BE -> {new_be}")
+        print(f"  BE → {new_be}")
     except Exception as e:
         print(f"❌ Erreur scraping BE : {e}")
         return
@@ -295,10 +219,10 @@ def main():
     be_changed = any(old_be.get(k) != new_be[k] for k in FUELS)
 
     if not lu_changed and not be_changed:
-        print("  ℹ️ Aucun changement detecte.")
+        print("  Aucun changement détecté.")
         return
 
-    print(f"  🔔 Changement detecte ! LU={lu_changed} BE={be_changed}")
+    print(f"  🚨 Changement détecté ! LU={lu_changed} BE={be_changed}")
 
     title, message = build_notification(old_lu, new_lu, old_be, new_be)
     send_notification(title, message)
@@ -306,7 +230,7 @@ def main():
     cache["lu"] = new_lu
     cache["be"] = new_be
     save_cache(cache)
-    print("  ✅ Cache mis a jour.")
+    print("  Cache mis à jour.")
 
 if __name__ == "__main__":
     main()
