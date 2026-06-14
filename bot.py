@@ -2,6 +2,7 @@ import requests
 import json
 import os
 import re
+import time
 from bs4 import BeautifulSoup
 from datetime import datetime
 
@@ -21,10 +22,26 @@ HEADERS = {
 
 FUELS = ["sp95", "sp98", "diesel", "mazout"]
 
+# ─── Requête robuste avec retries ──────────────────────────────────
+def fetch_with_retry(url, headers, timeout=30, retries=3, delay=10):
+    """GET avec plusieurs tentatives en cas d'échec (timeout, erreur réseau)."""
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            r = requests.get(url, headers=headers, timeout=timeout)
+            r.raise_for_status()
+            return r
+        except requests.exceptions.RequestException as e:
+            last_err = e
+            print(f"  ⏳ Tentative {attempt}/{retries} échouée sur {url} : {e}")
+            if attempt < retries:
+                print(f"     ↻ Nouvelle tentative dans {delay}s...")
+                time.sleep(delay)
+    raise last_err
+
 # ─── Scraping Luxembourg (petrol.lu) ───────────────────────────────
 def fetch_lu_prices():
-    r = requests.get(URL_LU, headers=HEADERS, timeout=15)
-    r.raise_for_status()
+    r = fetch_with_retry(URL_LU, HEADERS, timeout=30, retries=3, delay=10)
     soup = BeautifulSoup(r.text, "html.parser")
 
     table = soup.find("div", class_="prices-table")
@@ -58,8 +75,7 @@ def fetch_lu_prices():
 # ─── Scraping Belgique - Mazout >2000L (SPF Economie - officiel) ──
 def fetch_be_mazout():
     """Récupère le prix officiel du gasoil de chauffage BE >2000L (euro/l)."""
-    r = requests.get(URL_BE_MAZOUT, headers=HEADERS, timeout=20)
-    r.raise_for_status()
+    r = fetch_with_retry(URL_BE_MAZOUT, HEADERS, timeout=30, retries=3, delay=10)
     soup = BeautifulSoup(r.text, "html.parser")
 
     for row in soup.select("tbody#petrolTable_data tr"):
@@ -77,8 +93,7 @@ def fetch_be_mazout():
 
 # ─── Scraping Belgique - Carburants ───────────────────────────────
 def fetch_be_prices():
-    r = requests.get(URL_BE, headers=HEADERS, timeout=15)
-    r.raise_for_status()
+    r = fetch_with_retry(URL_BE, HEADERS, timeout=30, retries=3, delay=10)
     soup = BeautifulSoup(r.text, "html.parser")
 
     prices = {}
