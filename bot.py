@@ -1,7 +1,6 @@
 import requests
 import json
 import os
-import re
 import time
 from bs4 import BeautifulSoup
 from datetime import datetime
@@ -22,9 +21,27 @@ HEADERS = {
 
 FUELS = ["sp95", "sp98", "diesel", "mazout"]
 
+# ─── Fourchettes de prix valides (garde-fou anti-aberration) ───────
+PRICE_BOUNDS = {
+    "sp95":   (1.0, 2.5),
+    "sp98":   (1.0, 2.5),
+    "diesel": (1.0, 2.5),
+    "mazout": (0.5, 2.0),
+}
+
+def validate_price(fuel_key, price, source):
+    """Lève une ValueError si le prix est hors fourchette réaliste."""
+    low, high = PRICE_BOUNDS[fuel_key]
+    if not (low <= price <= high):
+        raise ValueError(
+            f"Prix {fuel_key} suspect sur {source} : {price}€ "
+            f"(attendu entre {low}€ et {high}€)"
+        )
+    return price
+
 # ─── Requête robuste avec retries ──────────────────────────────────
 def fetch_with_retry(url, headers, timeout=30, retries=3, delay=10):
-    """GET avec plusieurs tentatives en cas d'échec (timeout, erreur réseau)."""
+    """GET avec plusieurs tentatives en cas d'échec."""
     last_err = None
     for attempt in range(1, retries + 1):
         try:
@@ -48,7 +65,6 @@ def fetch_lu_prices():
     if not table:
         raise ValueError("Tableau prices-table introuvable sur petrol.lu")
 
-    # On prend la 1ère ligne TVAC
     tvac_row = None
     for row in table.find("tbody").find_all("tr"):
         cells = row.find_all("td")
@@ -60,21 +76,21 @@ def fetch_lu_prices():
         raise ValueError("Ligne TVAC introuvable sur petrol.lu")
 
     # Colonnes : Date | Super98 | Super95 | Diesel | Gasoil chauff | Gasoil chauff BTS (>1500) | TVA
-    sp98   = tvac_row[1].text.strip().replace(",", ".")
-    sp95   = tvac_row[2].text.strip().replace(",", ".")
-    diesel = tvac_row[3].text.strip().replace(",", ".")
-    mazout = tvac_row[5].text.strip().replace(",", ".")  # Gasoil chauff. BTS >1500L
+    sp98   = round(float(tvac_row[1].text.strip().replace(",", ".")), 3)
+    sp95   = round(float(tvac_row[2].text.strip().replace(",", ".")), 3)
+    diesel = round(float(tvac_row[3].text.strip().replace(",", ".")), 3)
+    mazout = round(float(tvac_row[5].text.strip().replace(",", ".")), 3)
 
     return {
-        "sp95":   round(float(sp95),   3),
-        "sp98":   round(float(sp98),   3),
-        "diesel": round(float(diesel), 3),
-        "mazout": round(float(mazout), 3),
+        "sp95":   validate_price("sp95",   sp95,   "petrol.lu"),
+        "sp98":   validate_price("sp98",   sp98,   "petrol.lu"),
+        "diesel": validate_price("diesel", diesel, "petrol.lu"),
+        "mazout": validate_price("mazout", mazout, "petrol.lu"),
     }
 
 # ─── Scraping Belgique - Mazout >2000L (SPF Economie - officiel) ──
 def fetch_be_mazout():
-    """Récupère le prix officiel du gasoil de chauffage BE >2000L (euro/l)."""
+    """Récupère le prix officiel du gasoil de chauffage BE >2000L."""
     r = fetch_with_retry(URL_BE_MAZOUT, HEADERS, timeout=30, retries=3, delay=10)
     soup = BeautifulSoup(r.text, "html.parser")
 
@@ -83,11 +99,11 @@ def fetch_be_mazout():
         if len(cells) < 2:
             continue
         label = cells[0].get_text(strip=True).lower()
-        # On cible bien le ">2000L" = "à partir de 2000 l"
         if "chauffage" in label and "partir de 2000" in label:
-            prix_txt = cells[1].get_text(strip=True)        # "1,1029  euro/l"
-            prix = prix_txt.split("euro")[0].strip()         # "1,1029"
-            return round(float(prix.replace(",", ".")), 3)   # 1.103
+            prix_txt = cells[1].get_text(strip=True)
+            prix = prix_txt.split("euro")[0].strip()
+            price = round(float(prix.replace(",", ".")), 3)
+            return validate_price("mazout", price, "petrolprices.economie.fgov.be")
 
     raise ValueError("Mazout BE >2000L introuvable sur petrolprices.economie.fgov.be")
 
@@ -97,33 +113,55 @@ def fetch_be_prices():
     soup = BeautifulSoup(r.text, "html.parser")
 
     prices = {}
-    fuel_cells  = soup.find_all("td", class_="officialPriceBe_col1")
-    price_cells = soup.find_all("td", class_="price")
 
-    if not fuel_cells or not price_cells:
-        raise ValueError("Tableau de prix introuvable sur carbu.com")
+    # On parcourt LIGNE PAR LIGNE pour garder nom + prix alignés
+    rows = soup.find_all("tr")
+    if not rows:
+        raise ValueError("Aucune ligne de tableau trouvée sur carbu.com")
 
-    for fuel_cell, price_cell in zip(fuel_cells, price_cells):
-        fuel_name  = fuel_cell.text.strip().lower()
-        price_text = price_cell.text.strip().replace(",", ".").replace("€/l", "").strip()
-        try:
-            price = round(float(price_text), 3)
-        except ValueError:
+    for row in rows:
+        fuel_cell = row.find("td", class_="officialPriceBe_col1")
+        if not fuel_cell:
             continue
 
-        if "diesel" in fuel_name:
-            prices["diesel"] = price
-        elif ("95" in fuel_name or "e10" in fuel_name) and "98" not in fuel_name:
-            prices["sp95"] = price
+        fuel_name = fuel_cell.text.strip().lower()
+
+        # Toutes les cellules "price" de CETTE ligne uniquement
+        price_cells = row.find_all("td", class_="price")
+
+        # On cherche le 1er prix RÉALISTE (1.0–2.5€) dans la ligne
+        valid_price = None
+        for pc in price_cells:
+            txt = (pc.text.strip()
+                     .replace(",", ".")
+                     .replace("€/l", "")
+                     .replace("€", "")
+                     .strip())
+            try:
+                p = round(float(txt), 3)
+            except ValueError:
+                continue
+            if 1.0 <= p <= 2.5:        # on ignore les €/100km et autres aberrations
+                valid_price = p
+                break
+
+        if valid_price is None:
+            print(f"  [DEBUG] Aucun prix valide pour '{fuel_name}' — ligne ignorée")
+            continue
+
+        print(f"  [DEBUG] fuel='{fuel_name}' → {valid_price}€")
+
+        if "diesel" in fuel_name and "diesel" not in prices:
+            prices["diesel"] = validate_price("diesel", valid_price, "carbu.com")
+        elif ("95" in fuel_name or "e10" in fuel_name) and "98" not in fuel_name and "sp95" not in prices:
+            prices["sp95"] = validate_price("sp95", valid_price, "carbu.com")
         elif "98" in fuel_name and "e5" in fuel_name and "sp98" not in prices:
-            prices["sp98"] = price
+            prices["sp98"] = validate_price("sp98", valid_price, "carbu.com")
 
     if not all(k in prices for k in ["sp95", "sp98", "diesel"]):
-        raise ValueError(f"Prix BE incomplets : {prices}")
+        raise ValueError(f"Prix BE incomplets après validation : {prices}")
 
-    # Mazout via la source officielle SPF Economie
     prices["mazout"] = fetch_be_mazout()
-
     return prices
 
 # ─── Cache ─────────────────────────────────────────────────────────
