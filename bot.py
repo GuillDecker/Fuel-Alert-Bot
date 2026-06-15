@@ -3,15 +3,14 @@ import json
 import os
 import time
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ─── Configuration ────────────────────────────────────────────────
 NTFY_URL   = os.environ.get("NTFY_URL")
 CACHE_FILE = "prices_cache.json"
 
-URL_LU        = "https://www.petrol.lu/prix-officiels/"
-URL_BE        = "https://carbu.com/belgique/prixmaximum"
-URL_BE_MAZOUT = "https://petrolprices.economie.fgov.be/petrolprices?locale=fr"
+URL_LU = "https://www.petrol.lu/prix-officiels/"
+URL_BE = "https://petrolprices.economie.fgov.be/petrolprices/?locale=fr"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -88,80 +87,46 @@ def fetch_lu_prices():
         "mazout": validate_price("mazout", mazout, "petrol.lu"),
     }
 
-# ─── Scraping Belgique - Mazout >2000L (SPF Economie - officiel) ──
-def fetch_be_mazout():
-    """Récupère le prix officiel du gasoil de chauffage BE >2000L."""
-    r = fetch_with_retry(URL_BE_MAZOUT, HEADERS, timeout=30, retries=3, delay=10)
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    for row in soup.select("tbody#petrolTable_data tr"):
-        cells = row.find_all("td")
-        if len(cells) < 2:
-            continue
-        label = cells[0].get_text(strip=True).lower()
-        if "chauffage" in label and "partir de 2000" in label:
-            prix_txt = cells[1].get_text(strip=True)
-            prix = prix_txt.split("euro")[0].strip()
-            price = round(float(prix.replace(",", ".")), 3)
-            return validate_price("mazout", price, "petrolprices.economie.fgov.be")
-
-    raise ValueError("Mazout BE >2000L introuvable sur petrolprices.economie.fgov.be")
-
-# ─── Scraping Belgique - Carburants ───────────────────────────────
+# ─── Scraping Belgique (SPF Economie - source officielle unique) ──
 def fetch_be_prices():
+    """Récupère tous les prix BE depuis la source officielle SPF Economie.
+    La page affiche directement le tarif valable à partir de DEMAIN."""
     r = fetch_with_retry(URL_BE, HEADERS, timeout=30, retries=3, delay=10)
     soup = BeautifulSoup(r.text, "html.parser")
 
     prices = {}
 
-    # On parcourt LIGNE PAR LIGNE pour garder nom + prix alignés
-    rows = soup.find_all("tr")
-    if not rows:
-        raise ValueError("Aucune ligne de tableau trouvée sur carbu.com")
-
-    for row in rows:
-        fuel_cell = row.find("td", class_="officialPriceBe_col1")
-        if not fuel_cell:
+    for row in soup.select("tbody#petrolTable_data tr"):
+        cells = row.find_all("td")
+        if len(cells) < 2:
             continue
 
-        fuel_name = fuel_cell.text.strip().lower()
+        label    = cells[0].get_text(strip=True).lower()
+        prix_txt = cells[1].get_text(strip=True)        # ex : "1,9810  euro/l"
+        prix_num = prix_txt.split("euro")[0].strip().replace(",", ".")
 
-        # Toutes les cellules "price" de CETTE ligne uniquement
-        price_cells = row.find_all("td", class_="price")
-
-        # On cherche le 1er prix RÉALISTE (1.0–2.5€) dans la ligne
-        valid_price = None
-        for pc in price_cells:
-            txt = (pc.text.strip()
-                     .replace(",", ".")
-                     .replace("€/l", "")
-                     .replace("€", "")
-                     .strip())
-            try:
-                p = round(float(txt), 3)
-            except ValueError:
-                continue
-            if 1.0 <= p <= 2.5:        # on ignore les €/100km et autres aberrations
-                valid_price = p
-                break
-
-        if valid_price is None:
-            print(f"  [DEBUG] Aucun prix valide pour '{fuel_name}' — ligne ignorée")
+        try:
+            price = round(float(prix_num), 3)
+        except ValueError:
+            print(f"  [DEBUG] Prix illisible pour '{label}' — ligne ignorée")
             continue
 
-        print(f"  [DEBUG] fuel='{fuel_name}' → {valid_price}€")
+        print(f"  [DEBUG] label='{label}' → {price}€")
 
-        if "diesel" in fuel_name and "diesel" not in prices:
-            prices["diesel"] = validate_price("diesel", valid_price, "carbu.com")
-        elif ("95" in fuel_name or "e10" in fuel_name) and "98" not in fuel_name and "sp95" not in prices:
-            prices["sp95"] = validate_price("sp95", valid_price, "carbu.com")
-        elif "98" in fuel_name and "e5" in fuel_name and "sp98" not in prices:
-            prices["sp98"] = validate_price("sp98", valid_price, "carbu.com")
+        # Mapping label officiel → clé interne
+        if "95" in label and "e10" in label:
+            prices["sp95"] = validate_price("sp95", price, "economie.fgov.be")
+        elif "98" in label and "e5" in label:
+            prices["sp98"] = validate_price("sp98", price, "economie.fgov.be")
+        elif "diesel" in label and "b7" in label:
+            prices["diesel"] = validate_price("diesel", price, "economie.fgov.be")
+        elif "chauffage" in label and "partir de 2000" in label:
+            prices["mazout"] = validate_price("mazout", price, "economie.fgov.be")
 
-    if not all(k in prices for k in ["sp95", "sp98", "diesel"]):
-        raise ValueError(f"Prix BE incomplets après validation : {prices}")
+    missing = [k for k in FUELS if k not in prices]
+    if missing:
+        raise ValueError(f"Prix BE incomplets : manquants={missing}, obtenus={prices}")
 
-    prices["mazout"] = fetch_be_mazout()
     return prices
 
 # ─── Cache ─────────────────────────────────────────────────────────
@@ -185,10 +150,10 @@ def diff_label(old, new):
     elif delta > 0:
         return f"📈 Hausse de +{delta:.3f}€"
     else:
-        return f"📉 Baisse de {delta:.3f}€"
+        return f"📉 Baisse de {abs(delta):.3f}€"
 
 def build_notification(old_lu, new_lu, old_be, new_be):
-    today = datetime.now().strftime("%d/%m")
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m")
 
     changed_lu = any(old_lu.get(k) != new_lu[k] for k in FUELS)
     changed_be = any(old_be.get(k) != new_be[k] for k in FUELS)
@@ -200,7 +165,7 @@ def build_notification(old_lu, new_lu, old_be, new_be):
     else:
         subtitle = "🇧🇪 Belgique change ses prix !"
 
-    title = f"⛽️ Alerte Carburants ({today})"
+    title = f"⛽️ Alerte Carburants ({tomorrow})"
     lines = [subtitle, ""]
 
     for fuel_key, emoji, label in [
