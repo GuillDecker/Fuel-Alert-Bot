@@ -88,33 +88,74 @@ def fetch_lu_carburants():
     Le tableau du haut affiche soit 1 colonne (prix actuels), soit 2 colonnes
     (prix actuels | nouveaux prix de demain). On prend TOUJOURS la dernière
     colonne de prix (= la plus à droite = les prix les plus récents/à venir).
+
+    SÉCURITÉ : on parcourt TOUS les <table> de la page et on retient
+    uniquement celui qui contient réellement les lignes diesel/super 95/super 98.
+    Ainsi, peu importe l'ordre ou l'ajout d'autres tableaux (pubs, évolution…),
+    on ne se trompe jamais de cible.
     """
     r = fetch_with_retry(URL_LU_CARBU, HEADERS, timeout=30, retries=3, delay=10)
     soup = BeautifulSoup(r.text, "html.parser")
 
-    table = soup.find("table")
-    if not table:
-        raise ValueError("Aucun tableau trouvé sur carbu.com")
+    label_map = {"diesel": "diesel", "super 95": "sp95", "super 98": "sp98"}
+    REQUIRED  = {"diesel", "super 95", "super 98"}
 
-    rows = table.find_all("tr")
+    # ── Étape 1 : trouver LE bon tableau parmi tous ceux de la page ──
+    target_table = None
+    best_score   = 0
+    for tbl in soup.find_all("table"):
+        labels_found = set()
+        for row in tbl.find_all("tr"):
+            first = row.find(["td", "th"])
+            if first:
+                txt = first.get_text(strip=True).lower()
+                if txt in label_map:
+                    labels_found.add(txt)
+        # On garde le tableau qui contient le plus de carburants attendus
+        score = len(labels_found & REQUIRED)
+        if score > best_score:
+            best_score   = score
+            target_table = tbl
+        if score == len(REQUIRED):   # tableau parfait trouvé → on s'arrête
+            break
+
+    if target_table is None or best_score < len(REQUIRED):
+        raise ValueError(
+            f"Tableau carburants introuvable sur carbu.com "
+            f"(meilleur score={best_score}/{len(REQUIRED)})"
+        )
+
+    rows = target_table.find_all("tr")
     if not rows:
         raise ValueError("Tableau carbu.com vide")
 
-    # En-tête : 1ère cellule = "carburants", les suivantes = dates (1 ou 2)
+    # ── Étape 2 : déterminer le nombre de colonnes de date (1 ou 2) ──
+    # On lit l'en-tête : 1ère cellule = "carburants", les suivantes = dates.
     header_cells = rows[0].find_all(["th", "td"])
     nb_date_cols = len(header_cells) - 1
+
+    # Sécurité : si l'en-tête est bizarre, on déduit le nb de colonnes
+    # à partir d'une ligne de données réelle (ex: ligne Diesel).
     if nb_date_cols < 1:
-        raise ValueError(
-            f"En-tête carbu.com inattendu : {[c.get_text(strip=True) for c in header_cells]}"
-        )
+        for row in rows[1:]:
+            cells = row.find_all(["td", "th"])
+            if cells and cells[0].get_text(strip=True).lower() in label_map:
+                nb_date_cols = len(cells) - 1
+                break
 
-    last_col_index = nb_date_cols  # index de la dernière colonne de prix
-    date_label = header_cells[last_col_index].get_text(strip=True)
-    print(f"  [DEBUG carbu] {nb_date_cols} colonne(s) de date → on lit '{date_label}'")
+    if nb_date_cols < 1:
+        raise ValueError("Impossible de déterminer le nombre de colonnes sur carbu.com")
 
+    last_col_index = nb_date_cols  # index de la dernière colonne = prix les plus récents
+
+    try:
+        date_label = header_cells[last_col_index].get_text(strip=True)
+    except IndexError:
+        date_label = "(inconnue)"
+    print(f"  [DEBUG carbu] {nb_date_cols} colonne(s) de date → on lit '{date_label}' (col {last_col_index})")
+
+    # ── Étape 3 : lire la dernière colonne pour chaque carburant ──
     prices = {}
-    label_map = {"diesel": "diesel", "super 95": "sp95", "super 98": "sp98"}
-
     for row in rows[1:]:
         cells = row.find_all(["td", "th"])
         if len(cells) < last_col_index + 1:
@@ -137,6 +178,7 @@ def fetch_lu_carburants():
         prices[key] = validate_price(key, price, "carbu.com")
         print(f"  [DEBUG carbu] {label} → {price}€")
 
+    # ── Étape 4 : contrôle final ──
     missing = [k for k in ("diesel", "sp95", "sp98") if k not in prices]
     if missing:
         raise ValueError(f"Carburants LU manquants sur carbu.com : {missing}, obtenus={prices}")
