@@ -1,6 +1,7 @@
 import requests
 import json
 import os
+import re
 import time
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
@@ -9,8 +10,9 @@ from datetime import datetime, timedelta
 NTFY_URL   = os.environ.get("NTFY_URL")
 CACHE_FILE = "prices_cache.json"
 
-URL_LU = "https://www.petrol.lu/prix-officiels/"
-URL_BE = "https://petrolprices.economie.fgov.be/petrolprices/?locale=fr"
+URL_LU_PETROL = "https://www.petrol.lu/prix-officiels/"              # mazout uniquement
+URL_LU_CARBU  = "https://carbu.com/luxembourg/index.php/prixmaximum"  # diesel / sp95 / sp98
+URL_BE        = "https://petrolprices.economie.fgov.be/petrolprices/?locale=fr"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -55,9 +57,10 @@ def fetch_with_retry(url, headers, timeout=30, retries=3, delay=10):
                 time.sleep(delay)
     raise last_err
 
-# ─── Scraping Luxembourg (petrol.lu) ───────────────────────────────
-def fetch_lu_prices():
-    r = fetch_with_retry(URL_LU, HEADERS, timeout=30, retries=3, delay=10)
+# ─── Scraping Luxembourg : mazout via petrol.lu ────────────────────
+def fetch_lu_mazout():
+    """Récupère uniquement le mazout de chauffage depuis petrol.lu (jour même OK)."""
+    r = fetch_with_retry(URL_LU_PETROL, HEADERS, timeout=30, retries=3, delay=10)
     soup = BeautifulSoup(r.text, "html.parser")
 
     table = soup.find("div", class_="prices-table")
@@ -74,17 +77,81 @@ def fetch_lu_prices():
     if not tvac_row:
         raise ValueError("Ligne TVAC introuvable sur petrol.lu")
 
-    # Colonnes : Date | Super98 | Super95 | Diesel | Gasoil chauff | Gasoil chauff BTS (>1500) | TVA
-    sp98   = round(float(tvac_row[1].text.strip().replace(",", ".")), 3)
-    sp95   = round(float(tvac_row[2].text.strip().replace(",", ".")), 3)
-    diesel = round(float(tvac_row[3].text.strip().replace(",", ".")), 3)
+    # Colonnes : Date | Super98 | Super95 | Diesel | Gasoil chauff | Gasoil chauff BTS | TVA
     mazout = round(float(tvac_row[5].text.strip().replace(",", ".")), 3)
+    return validate_price("mazout", mazout, "petrol.lu")
 
+# ─── Scraping Luxembourg : diesel/sp95/sp98 via carbu.com ──────────
+def fetch_lu_carburants():
+    """Récupère diesel, sp95, sp98 depuis carbu.com.
+
+    Le tableau du haut affiche soit 1 colonne (prix actuels), soit 2 colonnes
+    (prix actuels | nouveaux prix de demain). On prend TOUJOURS la dernière
+    colonne de prix (= la plus à droite = les prix les plus récents/à venir).
+    """
+    r = fetch_with_retry(URL_LU_CARBU, HEADERS, timeout=30, retries=3, delay=10)
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    table = soup.find("table")
+    if not table:
+        raise ValueError("Aucun tableau trouvé sur carbu.com")
+
+    rows = table.find_all("tr")
+    if not rows:
+        raise ValueError("Tableau carbu.com vide")
+
+    # En-tête : 1ère cellule = "carburants", les suivantes = dates (1 ou 2)
+    header_cells = rows[0].find_all(["th", "td"])
+    nb_date_cols = len(header_cells) - 1
+    if nb_date_cols < 1:
+        raise ValueError(
+            f"En-tête carbu.com inattendu : {[c.get_text(strip=True) for c in header_cells]}"
+        )
+
+    last_col_index = nb_date_cols  # index de la dernière colonne de prix
+    date_label = header_cells[last_col_index].get_text(strip=True)
+    print(f"  [DEBUG carbu] {nb_date_cols} colonne(s) de date → on lit '{date_label}'")
+
+    prices = {}
+    label_map = {"diesel": "diesel", "super 95": "sp95", "super 98": "sp98"}
+
+    for row in rows[1:]:
+        cells = row.find_all(["td", "th"])
+        if len(cells) < last_col_index + 1:
+            continue
+
+        label = cells[0].get_text(strip=True).lower()
+        if label not in label_map:
+            continue
+
+        # Dernière colonne : ex "= 1,733 €/l", "↓ 1,685 €/l" ou "1,685 €/l"
+        raw = cells[last_col_index].get_text(strip=True)
+        cleaned = re.sub(r"[^0-9,\.]", "", raw).replace(",", ".")
+        try:
+            price = round(float(cleaned), 3)
+        except ValueError:
+            print(f"  [DEBUG carbu] prix illisible pour '{label}' : '{raw}'")
+            continue
+
+        key = label_map[label]
+        prices[key] = validate_price(key, price, "carbu.com")
+        print(f"  [DEBUG carbu] {label} → {price}€")
+
+    missing = [k for k in ("diesel", "sp95", "sp98") if k not in prices]
+    if missing:
+        raise ValueError(f"Carburants LU manquants sur carbu.com : {missing}, obtenus={prices}")
+
+    return prices
+
+# ─── Scraping Luxembourg : assemblage final ────────────────────────
+def fetch_lu_prices():
+    carbu  = fetch_lu_carburants()   # diesel, sp95, sp98
+    mazout = fetch_lu_mazout()       # mazout
     return {
-        "sp95":   validate_price("sp95",   sp95,   "petrol.lu"),
-        "sp98":   validate_price("sp98",   sp98,   "petrol.lu"),
-        "diesel": validate_price("diesel", diesel, "petrol.lu"),
-        "mazout": validate_price("mazout", mazout, "petrol.lu"),
+        "sp95":   carbu["sp95"],
+        "sp98":   carbu["sp98"],
+        "diesel": carbu["diesel"],
+        "mazout": mazout,
     }
 
 # ─── Scraping Belgique (SPF Economie - source officielle unique) ──
