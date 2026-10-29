@@ -25,9 +25,9 @@
       "since": null
     },
     "petrol_lu": {
-      "fails": 14,
-      "last_error": "Site injoignable : 500 Server Error: Internal Server Error for url: https://www.petrol.lu/prix-officiels/",
-      "since": "2026-10-29T20:50:13+01:00"
+      "fails": 0,
+      "last_error": null,
+      "since": null
     },
     "spf_be": {
       "fails": 0,
@@ -35,17 +35,7 @@
       "since": null
     }
   },
-  "incidents": {
-    "source:petrol_lu": {
-      "body": "Source : petrol.lu (mazout Luxembourg)\nAdresse : https://www.petrol.lu/prix-officiels/\nPremier échec : 29/10/2026 à 20:50\nÉchecs consécutifs : 12\nDernière erreur : Site injoignable : 500 Server Error: Internal Server Error for url: https://www.petrol.lu/prix-officiels/\n\nTant que ce problème dure, les prix de cette source ne sont plus mis à jour. Les autres sources continuent de fonctionner normalement.",
-      "last_sent": "2026-10-29T21:45:17+01:00",
-      "mail_sent": true,
-      "ntfy_sent": true,
-      "opened": "2026-10-29T21:45:17+01:00",
-      "reminder": false,
-      "title": "petrol.lu (mazout Luxembourg) en échec depuis 55 min"
-    }
-  },
+  "incidents": {},
   "prices": {
     "be": {
       "diesel": {
