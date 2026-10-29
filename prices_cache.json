@@ -25,8 +25,8 @@
       "since": null
     },
     "petrol_lu": {
-      "fails": 3,
-      "last_error": "Site injoignable : HTTPSConnectionPool(host='www.petrol.lu', port=443): Max retries exceeded with url: /prix-officiels/ (Caused by ConnectTimeoutError(<HTTPSConnection(host='www.petrol.lu', port=443) at 0x73d92c04e240>, 'Connection to www.petrol.lu timed out. (connect timeout=10)'))",
+      "fails": 4,
+      "last_error": "Site injoignable : 500 Server Error: Internal Server Error for url: https://www.petrol.lu/prix-officiels/",
       "since": "2026-10-29T20:50:13+01:00"
     },
     "spf_be": {
