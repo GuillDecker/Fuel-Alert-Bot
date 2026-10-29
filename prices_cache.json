@@ -5,9 +5,9 @@
   },
   "health": {
     "carbu_lu": {
-      "fails": 0,
-      "last_error": null,
-      "since": null
+      "fails": 1,
+      "last_error": "Site injoignable : HTTPSConnectionPool(host='carbu.com', port=443): Max retries exceeded with url: /luxembourg/index.php/prixmaximum (Caused by ConnectTimeoutError(<HTTPSConnection(host='carbu.com', port=443) at 0x77d2446b9730>, 'Connection to carbu.com timed out. (connect timeout=10)'))",
+      "since": "2026-10-29T04:20:30+01:00"
     },
     "fr_fioul": {
       "fails": 0,
