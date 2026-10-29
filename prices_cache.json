@@ -25,7 +25,7 @@
       "since": null
     },
     "petrol_lu": {
-      "fails": 9,
+      "fails": 10,
       "last_error": "Site injoignable : 500 Server Error: Internal Server Error for url: https://www.petrol.lu/prix-officiels/",
       "since": "2026-10-29T20:50:13+01:00"
     },
