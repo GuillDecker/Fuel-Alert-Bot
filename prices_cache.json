@@ -1,7 +1,7 @@
 {
   "fioul_watch": {
-    "bulletin_date": "2026-10-26",
-    "published": "2026-10-28"
+    "bulletin_date": "2026-11-02",
+    "published": "2026-11-04"
   },
   "health": {
     "carbu_lu": {
@@ -30,9 +30,9 @@
       "since": null
     },
     "spf_be": {
-      "fails": 4,
-      "last_error": "Site injoignable : 503 Server Error: Service Unavailable for url: https://petrolprices.economie.fgov.be/petrolprices/?locale=fr",
-      "since": "2026-11-04T11:40:15+01:00"
+      "fails": 0,
+      "last_error": null,
+      "since": null
     }
   },
   "incidents": {},
