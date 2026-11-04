@@ -30,7 +30,7 @@
       "since": null
     },
     "spf_be": {
-      "fails": 3,
+      "fails": 4,
       "last_error": "Site injoignable : 503 Server Error: Service Unavailable for url: https://petrolprices.economie.fgov.be/petrolprices/?locale=fr",
       "since": "2026-11-04T11:40:15+01:00"
     }
