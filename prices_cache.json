@@ -30,9 +30,9 @@
       "since": null
     },
     "spf_be": {
-      "fails": 0,
-      "last_error": null,
-      "since": null
+      "fails": 1,
+      "last_error": "Site injoignable : 500 Server Error: Internal Server Error for url: https://petrolprices.economie.fgov.be/petrolprices/?locale=fr",
+      "since": "2026-11-08T08:35:16+01:00"
     }
   },
   "incidents": {},
