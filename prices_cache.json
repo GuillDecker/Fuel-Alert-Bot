@@ -30,9 +30,9 @@
       "since": null
     },
     "spf_be": {
-      "fails": 6,
-      "last_error": "Site injoignable : 404 Client Error: Not Found for url: https://petrolprices.economie.fgov.be/petrolprices/?locale=fr",
-      "since": "2026-11-17T13:50:15+01:00"
+      "fails": 0,
+      "last_error": null,
+      "since": null
     }
   },
   "incidents": {},
