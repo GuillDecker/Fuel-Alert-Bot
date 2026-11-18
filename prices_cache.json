@@ -25,9 +25,9 @@
       "since": null
     },
     "petrol_lu": {
-      "fails": 0,
-      "last_error": null,
-      "since": null
+      "fails": 1,
+      "last_error": "Site injoignable : HTTPSConnectionPool(host='www.petrol.lu', port=443): Read timed out. (read timeout=10)",
+      "since": "2026-11-18T19:55:14+01:00"
     },
     "spf_be": {
       "fails": 0,
