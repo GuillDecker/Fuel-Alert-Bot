@@ -25,9 +25,9 @@
       "since": null
     },
     "petrol_lu": {
-      "fails": 0,
-      "last_error": null,
-      "since": null
+      "fails": 1,
+      "last_error": "Site injoignable : HTTPSConnectionPool(host='www.petrol.lu', port=443): Max retries exceeded with url: /prix-officiels/ (Caused by NewConnectionError(\"HTTPSConnection(host='www.petrol.lu', port=443): Failed to establish a new connection: [Errno 111] Connection refused\"))",
+      "since": "2026-11-20T13:55:15+01:00"
     },
     "spf_be": {
       "fails": 0,
