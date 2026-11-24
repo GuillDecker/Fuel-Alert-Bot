@@ -5,9 +5,9 @@
   },
   "health": {
     "carbu_lu": {
-      "fails": 1,
-      "last_error": "Site injoignable : HTTPSConnectionPool(host='carbu.com', port=443): Read timed out. (read timeout=10)",
-      "since": "2026-11-24T19:10:23+01:00"
+      "fails": 0,
+      "last_error": null,
+      "since": null
     },
     "fr_fioul": {
       "fails": 0,
